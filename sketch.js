@@ -1,192 +1,252 @@
 // =========================================================
-// sketch.js - 画面に絵を描く部分
+// レイキャスト3D - 中学生向け教育用ゲーム
 // =========================================================
-//
-// p5.js というライブラリを使って、画面に3Dっぽい迷路を描きます。
-//
-// 【このファイルでやっていること】
-// 1. setup() ... 最初に1回だけ実行される準備
-// 2. draw()  ... 毎秒60回くらい繰り返し実行される描画
-//
+// 「レイキャスト」とは、目から光線（レイ）を飛ばして
+// 壁までの距離を測り、3Dっぽく見せる技術です。
+// 1990年代のゲーム「Wolfenstein 3D」などで使われました。
 // =========================================================
 
-// =====================
-// ⚙️ 設定
-// =====================
+// --- マップデータ ---
+// 1 = 壁（通れない）、0 = 通路（通れる）
+// 上から見た迷路の地図です
+const MAP = [
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+  [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  [1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1],
+  [1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1],
+  [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  [1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1],
+  [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  [1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1],
+  [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+  [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+];
 
-// レイを何ピクセルおきに飛ばすか
-// 数字が大きいほど荒くなるけど軽くなる
-const RAY_STEP = 5;
+// --- 定数（変わらない値）---
+const TILE = 64; // 1マスの大きさ（ピクセル）
+const ROWS = MAP.length; // マップの縦マス数
+const COLS = MAP[0].length; // マップの横マス数
+const FOV = Math.PI / 3; // 視野角（60度 = π/3ラジアン）
+const SPEED = 160; // 移動の速さ
+const ROT_SPEED = Math.PI; // 回転の速さ（180度/秒）
+const RAY_STEP = 4; // レイを何ピクセルおきに飛ばすか
 
-// 以下は setup() で計算する
-let numRays = 0; // レイの本数
-let screenDist = 0; // 視点からスクリーンまでの仮想距離
+// --- プレイヤーの状態（変わる値）---
+let px = TILE * 1.5; // x座標（1.5マス目 = マス1の中央）
+let py = TILE * 1.5; // y座標
+let angle = 0; // 向いている方向（0 = 右向き）
+let keys = {}; // 押されているキーを記録
 
-// =====================
-// 🎬 最初の準備
-// =====================
+// --- 計算用の変数 ---
+let numRays, screenDist;
 
+// =========================================================
+// setup(): 最初に1回だけ実行される
+// =========================================================
 function setup() {
-  // 描画エリアを作る（横900px × 縦500px）
   createCanvas(900, 500);
-
-  // レイの本数を計算
-  // 画面の幅 ÷ RAY_STEP = レイの本数
-  numRays = Math.floor(width / RAY_STEP);
-
-  // スクリーンまでの距離を計算
-  // これは「遠近感」を出すための計算で、
-  // 視野角から自動的に決まります
-  //
-  // 公式: screenDist = (画面幅÷2) ÷ tan(視野角÷2)
-  screenDist = width / 2 / Math.tan(player.fov / 2);
+  numRays = floor(width / RAY_STEP);
+  // スクリーン距離 = 画面幅の半分 ÷ tan(視野角の半分)
+  // これで遠近感が自然になる
+  screenDist = width / 2 / tan(FOV / 2);
 }
 
-// =====================
-// 🔄 毎フレームの描画
-// =====================
-
+// =========================================================
+// draw(): 毎秒約60回、繰り返し実行される
+// =========================================================
 function draw() {
-  // 前のフレームからの経過時間（秒に変換）
-  const dt = deltaTime / 1000;
+  const dt = deltaTime / 1000; // 前フレームからの経過秒数
 
-  // 1. プレイヤーを動かす
-  updatePlayer(dt);
+  // --- プレイヤーを動かす ---
+  movePlayer(dt);
 
-  // 2. 天井と床を描く
+  // --- 画面を描く ---
   drawSkyAndFloor();
-
-  // 3. 壁を描く（3D風に見せる）
   drawWalls();
-
-  // 4. ミニマップを描く（左上に小さく）
   drawMiniMap();
 }
 
-// =====================
-// 🌤️ 天井と床を描く
-// =====================
+// =========================================================
+// プレイヤーの移動と回転
+// =========================================================
+function movePlayer(dt) {
+  // 回転（←→キー）
+  if (keys.ArrowLeft) angle -= ROT_SPEED * dt;
+  if (keys.ArrowRight) angle += ROT_SPEED * dt;
 
+  // 移動量を計算
+  let dx = 0,
+    dy = 0;
+  const step = SPEED * dt;
+
+  // 前後移動（W/Sキー）
+  // cos(angle) = 進む方向のx成分、sin(angle) = y成分
+  if (keys.KeyW) {
+    dx += cos(angle) * step;
+    dy += sin(angle) * step;
+  }
+  if (keys.KeyS) {
+    dx -= cos(angle) * step;
+    dy -= sin(angle) * step;
+  }
+
+  // 横移動（A/Dキー）
+  // 横方向 = 前方向を90度回転させた方向
+  if (keys.KeyA) {
+    dx -= sin(angle) * step;
+    dy += cos(angle) * step;
+  }
+  if (keys.KeyD) {
+    dx += sin(angle) * step;
+    dy -= cos(angle) * step;
+  }
+
+  // 壁に当たらなければ移動（XとYを別々にチェック→壁に沿って滑れる）
+  if (!isWall(px + dx, py)) px += dx;
+  if (!isWall(px, py + dy)) py += dy;
+}
+
+// =========================================================
+// 壁かどうかを判定する
+// =========================================================
+function isWall(x, y) {
+  const mx = floor(x / TILE);
+  const my = floor(y / TILE);
+  // マップ外は壁として扱う
+  if (mx < 0 || mx >= COLS || my < 0 || my >= ROWS) return true;
+  return MAP[my][mx] === 1;
+}
+
+// =========================================================
+// 天井と床を描く
+// =========================================================
 function drawSkyAndFloor() {
-  noStroke(); // 輪郭線なし
-
-  // 天井（画面の上半分）- 薄い青
-  fill(200, 220, 255);
+  noStroke();
+  fill(200, 220, 255); // 天井：薄い青
   rect(0, 0, width, height / 2);
-
-  // 床（画面の下半分）- グレー
-  fill(180, 180, 180);
+  fill(160, 160, 160); // 床：グレー
   rect(0, height / 2, width, height / 2);
 }
 
-// =====================
-// 🧱 壁を描く（レイキャストの結果を使う）
-// =====================
-
+// =========================================================
+// 壁を描く（レイキャストのメイン部分）
+// =========================================================
 function drawWalls() {
-  // 画面の左端から右端まで、レイを1本ずつ飛ばす
   for (let i = 0; i < numRays; i++) {
-    // このレイの角度を計算
-    // 視野の左端から右端まで均等に分ける
-    const rayAngle = player.angle - player.fov / 2 + (i / numRays) * player.fov;
+    // このレイの角度を計算（視野の左端から右端まで均等に）
+    const rayAngle = angle - FOV / 2 + (i / numRays) * FOV;
 
     // レイを飛ばして壁を探す
     const hit = castRay(rayAngle);
 
-    // --- フィッシュアイ補正 ---
-    // 斜めに見た壁が膨らんで見えるのを防ぐ
-    // 正面との角度差の cos を掛けて距離を補正する
-    const angleDiff = rayAngle - player.angle;
-    const correctedDist = hit.distance * Math.cos(angleDiff);
+    // フィッシュアイ補正：斜めのレイは距離が長くなるので補正
+    const corrected = hit.dist * cos(rayAngle - angle);
 
-    // --- 壁の高さを計算 ---
-    // 近いほど高く、遠いほど低く見える
-    // 公式: 見かけの高さ = (実際の高さ ÷ 距離) × スクリーン距離
-    const wallHeight = (TILE_SIZE / correctedDist) * screenDist;
-
-    // 壁の上端の位置（画面の中央を基準に）
+    // 壁の高さを計算（近いほど高く見える）
+    const wallHeight = (TILE / corrected) * screenDist;
     const wallTop = height / 2 - wallHeight / 2;
 
-    // --- 壁の色 ---
-    // 縦の壁と横の壁で色を変えると立体感が出る
-    if (hit.hitVertical) {
-      fill(150, 170, 190); // 縦の壁（少し暗い）
-    } else {
-      fill(190, 210, 230); // 横の壁（少し明るい）
-    }
-
-    // 縦長の四角形として描く
+    // 色を決める（縦壁と横壁で色を変えて立体感を出す）
+    fill(hit.vertical ? [150, 170, 190] : [190, 210, 230]);
     noStroke();
     rect(i * RAY_STEP, wallTop, RAY_STEP, wallHeight);
   }
 }
 
-// =====================
-// 🗺️ ミニマップを描く
-// =====================
+// =========================================================
+// レイキャスト：指定した角度にレイを飛ばし、壁との距離を返す
+// =========================================================
+function castRay(rayAngle) {
+  const sinA = sin(rayAngle);
+  const cosA = cos(rayAngle);
+  const tanA = sinA / (cosA || 0.0001); // 0で割るのを防ぐ
 
+  // レイが進む方向
+  const down = sinA > 0;
+  const right = cosA > 0;
+
+  // --- 水平線（横のグリッド線）との交点を探す ---
+  let hDist = Infinity;
+  let hy = floor(py / TILE) * TILE + (down ? TILE : 0);
+  let hx = px + (hy - py) / tanA;
+  const hStepY = down ? TILE : -TILE;
+  const hStepX = hStepY / tanA;
+
+  for (let i = 0; i < 20; i++) {
+    if (isWall(hx, hy + (down ? 0 : -1))) {
+      hDist = dist(px, py, hx, hy);
+      break;
+    }
+    hx += hStepX;
+    hy += hStepY;
+  }
+
+  // --- 垂直線（縦のグリッド線）との交点を探す ---
+  let vDist = Infinity;
+  let vx = floor(px / TILE) * TILE + (right ? TILE : 0);
+  let vy = py + (vx - px) * tanA;
+  const vStepX = right ? TILE : -TILE;
+  const vStepY = vStepX * tanA;
+
+  for (let i = 0; i < 20; i++) {
+    if (isWall(vx + (right ? 0 : -1), vy)) {
+      vDist = dist(px, py, vx, vy);
+      break;
+    }
+    vx += vStepX;
+    vy += vStepY;
+  }
+
+  // 近い方を返す
+  return vDist < hDist
+    ? { dist: vDist, vertical: true }
+    : { dist: hDist, vertical: false };
+}
+
+// =========================================================
+// ミニマップを左上に描く
+// =========================================================
 function drawMiniMap() {
-  const scale = 0.18; // 縮小率
-
-  push(); // 描画設定を保存
-  translate(10, 10); // 左上に移動
-  scale(scale); // 縮小
+  push();
+  translate(10, 10);
+  scale(0.15);
 
   // マップを描く
-  for (let row = 0; row < MAP_ROWS; row++) {
-    for (let col = 0; col < MAP_COLS; col++) {
-      if (MAP[row][col] === 1) {
-        fill(60); // 壁は濃いグレー
-      } else {
-        fill(230); // 通路は薄いグレー
-      }
+  for (let y = 0; y < ROWS; y++) {
+    for (let x = 0; x < COLS; x++) {
+      fill(MAP[y][x] ? 60 : 230);
       noStroke();
-      rect(col * TILE_SIZE, row * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      rect(x * TILE, y * TILE, TILE, TILE);
     }
   }
 
-  // プレイヤーの位置を赤丸で表示
+  // プレイヤーを描く
   fill(255, 80, 80);
-  noStroke();
-  circle(player.x, player.y, 14);
-
-  // プレイヤーの向きを線で表示
+  circle(px, py, 16);
   stroke(255, 80, 80);
-  strokeWeight(2);
-  line(
-    player.x,
-    player.y,
-    player.x + Math.cos(player.angle) * 40,
-    player.y + Math.sin(player.angle) * 40,
-  );
+  strokeWeight(3);
+  line(px, py, px + cos(angle) * 40, py + sin(angle) * 40);
 
-  pop(); // 描画設定を元に戻す
+  pop();
 }
 
-// =====================
-// ⌨️ キー入力の処理
-// =====================
-
-// キーが押されたとき
+// =========================================================
+// キーボード入力
+// =========================================================
 function keyPressed() {
-  setKeyState(convertKey(keyCode, key), true);
+  const k = getKeyName();
+  if (k) keys[k] = true;
 }
 
-// キーが離されたとき
 function keyReleased() {
-  setKeyState(convertKey(keyCode, key), false);
+  const k = getKeyName();
+  if (k) keys[k] = false;
 }
 
-// p5.jsのキーコードを、わかりやすい名前に変換
-function convertKey(code, k) {
-  // アルファベットキー（A〜Z）
-  if (code >= 65 && code <= 90) {
-    return "Key" + String.fromCharCode(code);
-  }
-
-  // 矢印キー
-  if (code === LEFT_ARROW) return "ArrowLeft";
-  if (code === RIGHT_ARROW) return "ArrowRight";
-
-  return "";
+function getKeyName() {
+  if (keyCode >= 65 && keyCode <= 90)
+    return "Key" + String.fromCharCode(keyCode);
+  if (keyCode === LEFT_ARROW) return "ArrowLeft";
+  if (keyCode === RIGHT_ARROW) return "ArrowRight";
+  return null;
 }
